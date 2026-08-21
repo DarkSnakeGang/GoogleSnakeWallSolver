@@ -609,6 +609,7 @@ randomBtn.onclick = () => {
   writeUrlState({ bits: bitsEl.value });
   appendLog(`Random pattern (${size.label}).`);
   logEl.hidden = false;
+  startSolve();
 };
 
 copyBtn.onclick = async () => {
