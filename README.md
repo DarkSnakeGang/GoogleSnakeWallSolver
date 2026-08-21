@@ -22,6 +22,19 @@ Open [index.html](index.html) locally via any static file server, or enable GitH
 - **Copy pattern** — clipboard gets canonical `0`/`1` bits only (`1` = wall).
 - **Clear** — empty board.
 
+## Shareable URLs
+
+Patterns sync into the address bar as you edit:
+
+| URL | Effect |
+|-----|--------|
+| `?board=0101…` | Load that pattern (90 / 255 / 504 bits; size follows length) |
+| `?board=0101…&solve=1` | Load and **immediately Solve** |
+| `#board=0101…` | Same via hash (research Board style) |
+| `#board=0101…&solve=1` | Hash form with auto-solve |
+
+Aliases: `p` / `pattern` for the bits; `solve` with no value also counts as on. Paste-style strings in the param are parsed the same as the textarea. After a solve finishes, `solve` is dropped from the URL so a refresh does not loop; the `board=` bits remain for sharing.
+
 ## Paste formats
 
 As generous as PuddingBot `/wallall`:

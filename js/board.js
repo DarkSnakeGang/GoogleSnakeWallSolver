@@ -26,6 +26,89 @@ let worker = null;
 let solveId = 0;
 let solving = false;
 let lastResult = null;
+/** Skip URL→board sync while we are writing the URL ourselves. */
+let syncingUrl = false;
+
+/**
+ * URL forms (query and/or hash):
+ *   ?board=0101…&solve=1
+ *   ?p=0101…&solve
+ *   #board=0101…
+ *   #board=0101…&solve=1
+ * Pattern may also be pudding-style; we parse generously then canonicalize.
+ */
+function readUrlState() {
+  const params = new URLSearchParams(location.search);
+  const hashRaw = (location.hash || "").replace(/^#/, "");
+  let hashParams = null;
+  let bareHashBits = null;
+  if (hashRaw) {
+    if (hashRaw.includes("=")) {
+      hashParams = new URLSearchParams(hashRaw);
+    } else if (/^[012]+$/.test(hashRaw)) {
+      bareHashBits = hashRaw;
+    }
+  }
+  const pick = (...keys) => {
+    for (const key of keys) {
+      const q = params.get(key);
+      if (q != null && q !== "") return q;
+      if (hashParams) {
+        const h = hashParams.get(key);
+        if (h != null && h !== "") return h;
+      }
+    }
+    return bareHashBits;
+  };
+  const pattern = pick("board", "p", "pattern");
+  const solveRaw =
+    params.get("solve") ??
+    (hashParams ? hashParams.get("solve") : null) ??
+    (/(?:^|[?&#])solve(?:[=&]|$)/i.test(location.href) ? "1" : null);
+  const solve =
+    solveRaw != null &&
+    !["0", "false", "no", "off"].includes(String(solveRaw).toLowerCase());
+  return { pattern, solve };
+}
+
+function writeUrlState({ bits = null, solve = false, replace = true } = {}) {
+  const pattern = bits != null ? bits : bitsEl.value;
+  const parsed = parsePatternInput(pattern);
+  const canon = parsed.ok ? parsed.bits : null;
+  const url = new URL(location.href);
+  url.search = "";
+  url.hash = "";
+  if (canon) {
+    url.searchParams.set("board", canon);
+    if (solve) url.searchParams.set("solve", "1");
+  }
+  const next = url.pathname + url.search + url.hash;
+  const cur = location.pathname + location.search + location.hash;
+  if (next === cur) return;
+  syncingUrl = true;
+  if (replace) history.replaceState(null, "", next);
+  else history.pushState(null, "", next);
+  queueMicrotask(() => {
+    syncingUrl = false;
+  });
+}
+
+function applyUrlState({ autoSolve = true } = {}) {
+  const { pattern, solve } = readUrlState();
+  if (!pattern) return false;
+  const parsed = parsePatternInput(pattern);
+  if (!parsed.ok) {
+    outEl.textContent = parsed.error || "Invalid pattern in URL.";
+    return false;
+  }
+  applyParsedBits(parsed);
+  setIdleStatus();
+  writeUrlState({ bits: parsed.bits, solve: false, replace: true });
+  if (autoSolve && solve) {
+    queueMicrotask(() => startSolve());
+  }
+  return true;
+}
 
 function boardCell() {
   const n = parseFloat(
@@ -64,6 +147,7 @@ function rebuildGrid() {
       bitsFromBoard();
       lastResult = null;
       setIdleStatus();
+      writeUrlState({ bits: bitsEl.value });
     };
     boardEl.appendChild(d);
     cells.push(d);
@@ -388,6 +472,7 @@ function onWorkerMessage(ev) {
   if (msg.type === "error") {
     outEl.textContent = "Solve failed: " + msg.message;
     setBusy(false);
+    writeUrlState({ bits: bitsEl.value, solve: false });
     return;
   }
   if (msg.type === "done") {
@@ -395,6 +480,8 @@ function onWorkerMessage(ev) {
     setBoardStatus(msg, true, !!msg.stopped);
     if (msg.stopped) appendLog("Stopped.");
     setBusy(false);
+    // Keep shareable pattern link; drop solve= so refresh does not re-run forever.
+    writeUrlState({ bits: bitsEl.value, solve: false });
   }
 }
 
@@ -419,6 +506,7 @@ function startSolve() {
   applyParsedBits(parsed);
   clearTour();
   boardFromBits();
+  writeUrlState({ bits: parsed.bits, solve: true });
   logEl.hidden = false;
   logEl.textContent = "";
   setBusy(true);
@@ -443,6 +531,7 @@ function stopSolve() {
     outEl.textContent = (outEl.textContent || "") + "\nStopped by user.";
   }
   appendLog("Stopped.");
+  writeUrlState({ bits: bitsEl.value, solve: false });
 }
 
 function fitBoardGrid() {
@@ -471,6 +560,7 @@ sizeSel.onchange = () => {
   bitsEl.value = emptyBits(size.cells);
   rebuildGrid();
   setIdleStatus();
+  writeUrlState({ bits: bitsEl.value });
 };
 
 bitsEl.addEventListener("input", () => {
@@ -480,6 +570,7 @@ bitsEl.addEventListener("input", () => {
   if (parsed.ok) {
     applyParsedBits(parsed);
     setIdleStatus();
+    writeUrlState({ bits: parsed.bits });
     return;
   }
   // Live toggle: if already canonical length for current size, apply directly
@@ -488,6 +579,7 @@ bitsEl.addEventListener("input", () => {
     bitsEl.value = cleaned;
     boardFromBits();
     setIdleStatus();
+    writeUrlState({ bits: cleaned });
   }
 });
 
@@ -501,6 +593,7 @@ bitsEl.addEventListener("paste", (e) => {
   }
   applyParsedBits(parsed);
   setIdleStatus();
+  writeUrlState({ bits: parsed.bits });
 });
 
 solveBtn.onclick = () => startSolve();
@@ -513,6 +606,7 @@ randomBtn.onclick = () => {
   bitsEl.value = wallMapToBits(wmap);
   boardFromBits();
   setIdleStatus();
+  writeUrlState({ bits: bitsEl.value });
   appendLog(`Random pattern (${size.label}).`);
   logEl.hidden = false;
 };
@@ -543,11 +637,33 @@ clearBtn.onclick = () => {
   outEl.textContent = "No board loaded.";
   outEl.classList.remove("tour-best", "tour-open");
   chipsEl.innerHTML = "";
+  writeUrlState({ bits: null });
+  // Clear query entirely
+  syncingUrl = true;
+  history.replaceState(null, "", location.pathname);
+  queueMicrotask(() => {
+    syncingUrl = false;
+  });
 };
 
 window.addEventListener("resize", () => {
   requestAnimationFrame(fitBoardGrid);
 });
 
+window.addEventListener("popstate", () => {
+  if (syncingUrl) return;
+  if (!applyUrlState({ autoSolve: true })) {
+    rebuildGrid();
+    setIdleStatus();
+  }
+});
+
+window.addEventListener("hashchange", () => {
+  if (syncingUrl) return;
+  applyUrlState({ autoSolve: true });
+});
+
 rebuildGrid();
-setIdleStatus();
+if (!applyUrlState({ autoSolve: true })) {
+  setIdleStatus();
+}
