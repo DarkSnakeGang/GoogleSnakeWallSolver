@@ -48,6 +48,18 @@ As generous as PuddingBot `/wallall`:
 
 Complete patterns follow community/`wall.py` carrot rules: no 8-neighbor wall adjacency, ±2 spacing on borders, and corner anti–death-trap pairs. Live spawn radius and snake occupancy are ignored for static pattern work.
 
+## Performance (WASM DFS)
+
+Hamiltonian path search uses a **WebAssembly** port of WallResearch’s Warnsdorff C DFS (`native/`, `wasm/warnsdorff.wasm`), with a pure-JS fallback if WASM fails to load. The solve log prints `DFS: wasm` or `DFS: js`.
+
+Rebuild the artifact (Docker + Emscripten):
+
+```powershell
+.\scripts\build-wasm.ps1
+```
+
+Requires Docker. Or install [emsdk](https://emscripten.org/) and run `./scripts/build-wasm.sh`.
+
 ## Local preview
 
 ```bash

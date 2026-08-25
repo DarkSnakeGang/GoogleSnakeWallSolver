@@ -16,23 +16,42 @@ import {
   tourFromSnakemap,
   progressScope,
   setCancelCheck,
+  initDfsWasm,
+  dfsWasmReady,
+  syncWasmCancel,
 } from "./hampath.js";
+import { dfsWasmSetCancelled } from "./dfs-wasm.js";
 import { Pattern, bitsToWallMap } from "./wall.js";
 
 let cancelled = false;
+let dfsBackendLogged = false;
 
 setCancelCheck(() => cancelled);
 
-self.onmessage = (ev) => {
+const wasmInit = initDfsWasm();
+
+self.onmessage = async (ev) => {
   const msg = ev.data || {};
   if (msg.type === "cancel") {
     cancelled = true;
+    dfsWasmSetCancelled(true);
+    syncWasmCancel();
     return;
   }
   if (msg.type !== "solve") return;
   cancelled = false;
+  dfsWasmSetCancelled(false);
   const { bits, width, height, id } = msg;
   try {
+    await wasmInit;
+    if (!dfsBackendLogged) {
+      dfsBackendLogged = true;
+      self.postMessage({
+        type: "log",
+        id,
+        message: dfsWasmReady() ? "DFS: wasm" : "DFS: js",
+      });
+    }
     const result = runSolve(bits, width, height, id);
     self.postMessage({
       type: "done",

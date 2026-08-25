@@ -5,6 +5,16 @@
  * Tours are arrays of [row, column] pairs.
  */
 
+import {
+  dfsWasmReady,
+  dfsWasmConfigure,
+  dfsWasmSetCancelled,
+  dfsWasmRun,
+  initDfsWasm,
+} from "./dfs-wasm.js";
+
+export { initDfsWasm, dfsWasmReady };
+
 export const WALL = 2;
 
 let WIDTH = 10;
@@ -50,6 +60,11 @@ export function setCancelCheck(fn) {
   }
   cancelCheck = fn || null;
   cancelCounter = 0;
+  dfsWasmSetCancelled(false);
+}
+
+export function syncWasmCancel() {
+  dfsWasmSetCancelled(Boolean(cancelCheck && cancelCheck()));
 }
 
 export function configureBoard(width = 10, height = 9) {
@@ -75,6 +90,7 @@ export function configureBoard(width = 10, height = 9) {
     for (const neighbor of neighbors) mask |= bit(neighbor);
     return mask;
   });
+  dfsWasmConfigure(width, height);
 }
 
 configureBoard();
@@ -372,7 +388,7 @@ function colorCount(remaining) {
   return black;
 }
 
-function warnsdorffDfs(
+function warnsdorffDfsJs(
   initialHead,
   initialRemaining,
   initialCount,
@@ -468,11 +484,62 @@ function warnsdorffDfs(
     for (const neighbor of neighbors) {
       if (checkCancelled()) return fail();
       if (reachableMask(neighbor, open) !== open) continue;
-      if (warnsdorffDfs(neighbor, open, openCount, openBlack,
+      if (warnsdorffDfsJs(neighbor, open, openCount, openBlack,
         requiredEnd, nodes, nodeLimit, path)) return true;
     }
     return fail();
   }
+}
+
+function warnsdorffDfs(
+  initialHead,
+  initialRemaining,
+  initialCount,
+  initialBlack,
+  requiredEnd = null,
+  nodes = null,
+  nodeLimit = 0,
+  path = null,
+) {
+  if (dfsWasmReady()) {
+    dfsWasmConfigure(WIDTH, HEIGHT);
+    dfsWasmSetCancelled(Boolean(cancelCheck && cancelCheck()));
+    const wantPath = path != null;
+    const result = dfsWasmRun(
+      initialHead,
+      initialRemaining,
+      initialCount,
+      initialBlack,
+      requiredEnd,
+      {
+        nodeLimit: nodeLimit || 0,
+        wantPath,
+        useMemo: false,
+        nodes: nodes || [0],
+      }
+    );
+    if (result === null) {
+      // unexpected glue failure — fall through to JS
+    } else if (wantPath) {
+      if (Array.isArray(result)) {
+        for (const i of result) path.push(i);
+        return true;
+      }
+      return false;
+    } else {
+      return Boolean(result);
+    }
+  }
+  return warnsdorffDfsJs(
+    initialHead,
+    initialRemaining,
+    initialCount,
+    initialBlack,
+    requiredEnd,
+    nodes,
+    nodeLimit,
+    path
+  );
 }
 
 function pathStarts(free, nfree, degreeOne) {
