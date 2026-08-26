@@ -67,3 +67,27 @@ npx --yes serve .
 ```
 
 Then open the printed URL. Module workers need HTTP(S), not `file://`.
+
+## Hamilton Mod
+
+[`HamiltonMod.js`](HamiltonMod.js) is a Mod Loader mod (same `runCodeBefore` / `alterSnakeCode` / `runCodeAfter` contract as Pudding). In **wall mode only**, after each successful wall spawn it solves the live pattern (path → cycle if coloring allows → closest endpoints) and paints a **thin red polyline** of the tour on the board.
+
+| Score-bar icon (native `UEI8qf` / Counter `#stat-icon`) | Meaning |
+|-------------------------------|---------|
+| Default (native / Counter wall trophy) | A solution exists; line is drawn (updates live while closest improves) |
+| Blue wall brick | Searching; no tour yet |
+| Red wall brick | Conclusive no for the current pattern |
+| Dark yellow wall brick | Worker failed to start (retries exhausted) |
+
+Recolors only the **brick pixels** on the wall trophy (`trophy_01`); pale mortar/backing stays unchanged. Targets native `img[jsname="UEI8qf"]` or Counter `#stat-icon`. Does not touch the fruit icon or death-screen control.
+
+Solves in a classic Web Worker (source inlined into `HamiltonMod.js` and started via blob URL) so gameplay should not freeze. After solver changes: `node scripts/embed-classic-worker.cjs`.
+Load URL (after Pages deploy of this file):
+
+`https://darksnakegang.github.io/GoogleSnakeWallSolver/HamiltonMod.js`
+
+Works alone or with Pudding (load **Hamilton after Pudding** so it hooks `wallCoords.push`). Override the solver origin with `window.HAMILTON_SOLVER_BASE` before the mod runs if needed.
+
+## Testing Hamilton Mod
+
+See [scripts/hamilton-testing.md](scripts/hamilton-testing.md) for local smoke and **in-game** Playwright runs against googlesnakemods.com.

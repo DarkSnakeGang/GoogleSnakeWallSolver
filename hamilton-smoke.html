@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Hamilton Mod smoke test</title>
+</head>
+<body>
+  <h1>Hamilton Mod smoke</h1>
+  <p>Serve the repo root, then open this page or run <code>node scripts/run-hamilton-smoke.cjs</code>.</p>
+  <pre id="out"></pre>
+  <div class="sEOCsb">
+    <img
+      id="stat-icon"
+      width="25"
+      height="25"
+      src="https://www.google.com/logos/fnbx/snake_arcade/v22/trophy_01.png"
+    />
+    <img
+      id="fruit-icon"
+      width="25"
+      height="25"
+      src="https://www.google.com/logos/fnbx/snake_arcade/v3/apple_00.png"
+    />
+  </div>
+  <canvas id="c" width="400" height="360"></canvas>
+  <script>
+    window.HAMILTON_SOLVER_BASE = location.origin + "/";
+    window.CurrentModeNum = 1;
+    window.stats = { statShown: "walls" };
+    window.getStatIconImageSrc = function () {
+      return "https://www.google.com/logos/fnbx/snake_arcade/v22/trophy_01.png";
+    };
+    window.wallCoords = [];
+    window.timeKeeper = {
+      getCurrentSetting: function (k) {
+        if (k === "size") return 1; // small 10×9
+        return 0;
+      },
+    };
+
+    const out = document.getElementById("out");
+    const log = (m) => {
+      out.textContent += m + "\n";
+      console.log(m);
+    };
+
+    window.__hamiltonSmoke = { done: false, ok: false, errors: [] };
+
+    async function run() {
+      try {
+        await new Promise((resolve, reject) => {
+          const s = document.createElement("script");
+          s.src = "./HamiltonMod.js";
+          s.onload = resolve;
+          s.onerror = () => reject(new Error("failed to load HamiltonMod.js"));
+          document.head.appendChild(s);
+        });
+        log("loaded HamiltonMod.js");
+
+        window.HamiltonMod.runCodeBefore();
+        log("runCodeBefore ok");
+
+        const fruitBefore = document.getElementById("fruit-icon").src;
+        window.HamiltonMod.setWallIconState("searching");
+        {
+          const deadline = Date.now() + 5000;
+          while (
+            Date.now() < deadline &&
+            !document.getElementById("stat-icon").src.startsWith("data:image/")
+          ) {
+            await new Promise((r) => setTimeout(r, 50));
+          }
+        }
+        if (document.getElementById("fruit-icon").src !== fruitBefore) {
+          throw new Error("fruit icon was modified (must not touch fruit)");
+        }
+        const stat = document.getElementById("stat-icon");
+        if (!stat.src.startsWith("data:image/")) {
+          throw new Error("stat-icon should use recolored brick PNG");
+        }
+        log("icon searching: bricks recolored, fruit untouched");
+
+        window.HamiltonMod.setWallIconState("none");
+        await new Promise((r) => setTimeout(r, 50));
+        if (document.getElementById("fruit-icon").src !== fruitBefore) {
+          throw new Error("fruit icon modified on red state");
+        }
+        log("icon none: fruit still untouched");
+
+        window.HamiltonMod.setWallIconState("ok");
+        log("icon ok restored");
+
+        const empty90 = "0".repeat(90);
+        const dims = { width: 10, height: 9, cells: 90 };
+        window.HamiltonMod.solveId = 0;
+        const prev = window.HamiltonMod.onWorkerMessage.bind(window.HamiltonMod);
+        window.HamiltonMod.onWorkerMessage = function (msg) {
+          prev(msg);
+          if (msg.type === "tour" && msg.tour && msg.tour.length) {
+            log("tour msg: len=" + msg.tour.length + " kind=" + msg.kind);
+          }
+          if (msg.type === "done") {
+            log("done: kind=" + msg.kind + " has=" + !!msg.tour);
+            window.__doneMsg = msg;
+          }
+          if (msg.type === "error") {
+            window.__hamiltonSmoke.errors.push(msg.message);
+            log("error: " + msg.message);
+          }
+        };
+
+        window.HamiltonMod.setWallIconState("searching");
+        window.HamiltonMod._startSolve(empty90, dims);
+
+        const deadline = Date.now() + 60000;
+        while (Date.now() < deadline) {
+          if (window.__doneMsg || window.__hamiltonSmoke.errors.length) break;
+          await new Promise((r) => setTimeout(r, 100));
+        }
+
+        if (window.__hamiltonSmoke.errors.length) {
+          throw new Error(window.__hamiltonSmoke.errors.join("; "));
+        }
+        if (!window.__doneMsg) throw new Error("timeout waiting for worker done");
+        if (!window.__doneMsg.tour || window.__doneMsg.tour.length < 2) {
+          throw new Error("no tour on empty board");
+        }
+        if (!window.HamiltonMod.currentTour) {
+          throw new Error("currentTour not set on HamiltonMod");
+        }
+        log("solve ok, tour cells=" + window.HamiltonMod.currentTour.length);
+
+        const ctx = document.getElementById("c").getContext("2d");
+        window.HamiltonMod.paintTour(ctx, 20, 0, 0);
+        log("paintTour ok");
+
+        window.__hamiltonSmoke.ok = true;
+        log("ALL PASS");
+      } catch (e) {
+        log("FAIL: " + (e && e.message ? e.message : e));
+        window.__hamiltonSmoke.errors.push(String(e));
+      } finally {
+        window.__hamiltonSmoke.done = true;
+      }
+    }
+    run();
+  </script>
+</body>
+</html>
