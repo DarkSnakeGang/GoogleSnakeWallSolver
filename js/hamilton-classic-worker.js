@@ -1764,9 +1764,18 @@
 
   // js/hamilton-classic-entry.js
   var cancelled = false;
+  var activeSolveId = 0;
   var dfsBackendLogged = false;
   setCancelCheck(() => cancelled);
   var wasmInit = initDfsWasm();
+  function isActive(id) {
+    return id === activeSolveId && !cancelled;
+  }
+  function postActive(id, payload) {
+    if (!isActive(id) && payload.type !== "done") return;
+    if (id !== activeSolveId) return;
+    self.postMessage(payload);
+  }
   self.onmessage = async (ev) => {
     const msg = ev.data || {};
     if (msg.type === "cancel") {
@@ -1776,28 +1785,49 @@
       return;
     }
     if (msg.type !== "solve") return;
+    const { bits, width, height, id } = msg;
+    activeSolveId = id;
     cancelled = false;
     dfsWasmSetCancelled(false);
-    const { bits, width, height, id } = msg;
     try {
       await wasmInit;
+      if (id !== activeSolveId) return;
+      if (cancelled) {
+        postActive(id, {
+          type: "done",
+          id,
+          stopped: true,
+          bits,
+          walls: 0,
+          coloring: null,
+          tour: null,
+          kind: "none",
+          has_path: false,
+          tour_best: null,
+          end_gap: null,
+          min_end_gap: null
+        });
+        return;
+      }
       if (!dfsBackendLogged) {
         dfsBackendLogged = true;
-        self.postMessage({
+        postActive(id, {
           type: "log",
           id,
           message: dfsWasmReady() ? "DFS: wasm" : "DFS: js"
         });
       }
+      if (id !== activeSolveId || cancelled) return;
       const result = runSolve(bits, width, height, id);
-      self.postMessage({
+      postActive(id, {
         type: "done",
         id,
-        stopped: cancelled,
+        stopped: cancelled || id !== activeSolveId,
         ...result
       });
     } catch (err) {
-      self.postMessage({
+      if (id !== activeSolveId) return;
+      postActive(id, {
         type: "error",
         id,
         message: err && err.message ? err.message : String(err)
@@ -1805,10 +1835,10 @@
     }
   };
   function emit(id, text) {
-    self.postMessage({ type: "log", id, message: text });
+    postActive(id, { type: "log", id, message: text });
   }
   function emitTour(id, payload) {
-    self.postMessage({ type: "tour", id, ...payload });
+    postActive(id, { type: "tour", id, ...payload });
   }
   function finish(tour, cycle, tourBest, color, bits, walls, cycleOpen) {
     const gap = pathEndGap(tour, cycle);
@@ -1861,10 +1891,12 @@
       return finish(null, false, null, color, bits, walls, cycleOpen);
     }
     return progressScope((msg) => emit(id, msg), 1e3, () => {
-      if (color.path_possible && !cancelled) {
+      if (color.path_possible && isActive(id)) {
         emit(id, "searching for a path");
         const found = findHamiltonianPath(grid);
-        if (cancelled) return finish(tour, cycle, tourBest, color, bits, walls, cycleOpen);
+        if (!isActive(id)) {
+          return finish(tour, cycle, tourBest, color, bits, walls, cycleOpen);
+        }
         if (found) {
           tour = found;
           const gap = pathEndGap(found);
@@ -1876,7 +1908,7 @@
           emit(id, "no path");
         }
       }
-      if (color.cycle_possible && !cycle && !cancelled) {
+      if (color.cycle_possible && !cycle && isActive(id)) {
         emit(id, "searching for a cycle");
         const wmap = bitsToWallMap(bits, width, height);
         const pattern = new Pattern(width, height, { wmap, walls });
@@ -1885,9 +1917,11 @@
             emit(id, extra || "cycle search");
           }
         };
-        pattern._cancelled = () => cancelled;
+        pattern._cancelled = () => !isActive(id);
         const res = pattern.solve();
-        if (cancelled) return finish(tour, cycle, tourBest, color, bits, walls, cycleOpen);
+        if (!isActive(id)) {
+          return finish(tour, cycle, tourBest, color, bits, walls, cycleOpen);
+        }
         if (res) {
           const found = tourFromSnakemap(res.wallmap, res.snakemap);
           if (found) {
@@ -1901,7 +1935,7 @@
           emit(id, "no cycle");
         }
       }
-      if (tour && !cycle && !cancelled) {
+      if (tour && !cycle && isActive(id)) {
         const gap = pathEndGap(tour);
         const minGap = minPathEndGap(tour.length, cycleOpen);
         if (gap != null && minGap != null && gap <= minGap) {
@@ -1913,6 +1947,7 @@
           const [newTour, newGap, isBest] = improvePathEndpoints(grid, tour, {
             cyclePossible: cycleOpen,
             onBetter(t, g, best) {
+              if (!isActive(id)) return;
               tour = t;
               tourBest = best;
               if (g === 1 && t.length % 2 === 0) {

@@ -17,7 +17,8 @@ Keep the static server running for smoke tests. In-game tests hit googlesnakemod
 
 | Command | What it tests |
 |---------|----------------|
-| `node scripts/run-hamilton-smoke.cjs` | Local page: icon (trophy only), classic Worker solve, `paintTour` |
+| `node scripts/run-hamilton-smoke.cjs` | Local page: icon (trophy only), classic Worker solve, `paintTour`, stale-generation ignore |
+| `node scripts/test-hamilton-generations.cjs` | Node-only: solveId bump, hard-drop, stale `tour`/`done`/`stopped` ignored |
 | `node scripts/run-hamilton-smoke3.cjs` | Extra Worker cases (empty + one wall) after smoke page |
 | `node scripts/run-hamilton-ingame.cjs` | **Real** [googlesnakemods.com/v/current](https://googlesnakemods.com/v/current/): load mod, Worker solve, no freeze, fruit untouched |
 | `node scripts/run-hamilton-icon-test.cjs` | **Real** top-bar trophy (`UEI8qf`): blue searching → green/default ok → red none; fruit + death icon untouched |
@@ -30,5 +31,6 @@ Open [`hamilton-smoke.html`](../hamilton-smoke.html) manually at `http://127.0.0
 
 - Custom mod name on the site must be `HamiltonMod` (matches `window.HamiltonMod`).
 - The solver Worker is **inlined** inside `HamiltonMod.js` (blob Worker — no Pages fetch). After changing solver code: `npm install --no-save esbuild` then `node scripts/embed-classic-worker.cjs`.
+- Each wall spawn (and game reset) **kills the previous Worker solve** and bumps `solveId`; stale `tour`/`done` messages from older patterns are ignored. Smoke covers this regression after a successful empty-board solve.
 - In-game scripts can still route Pages URLs to disk when useful.
 - Screenshot from the last in-game run: `hamilton-ingame-test.png` (generated).

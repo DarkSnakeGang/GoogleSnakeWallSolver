@@ -53,6 +53,10 @@ window.HamiltonMod.runCodeBefore = function () {
   HM.isCycle = false;
   HM.iconState = "idle";
   HM.solveId = 0;
+  HM.solvePhase = "idle";
+  HM._activeBits = null;
+  HM._activeSolveId = 0;
+  HM._workerEpoch = 0;
   HM.worker = null;
   HM._boardProps = null;
   HM.WORKER_MAX_RETRIES = 4;
@@ -305,13 +309,51 @@ window.HamiltonMod.runCodeBefore = function () {
     }
   };
 
-  HM.onGameReset = function onGameReset() {
-    HM.cancelSolve(true);
+  /** Invalidate any in-flight solve so stale worker messages cannot apply. */
+  HM.beginSolveGeneration = function beginSolveGeneration(bits) {
+    const id = ++HM.solveId;
+    HM._activeSolveId = id;
+    HM._activeBits = bits || null;
+    HM.solvePhase = "idle";
     HM.clearTour();
+    HM._workerEpoch = (HM._workerEpoch || 0) + 1;
+    HM.cancelSolve(true);
+    return id;
+  };
+
+  HM.onGameReset = function onGameReset() {
+    HM.beginSolveGeneration(null);
     if (!window.wallCoords) window.wallCoords = [];
     else window.wallCoords.length = 0;
     HM.setWallIconState("idle");
     HM.updateIndicator();
+  };
+
+  HM._messageMatchesActive = function _messageMatchesActive(msg) {
+    if (msg.id !== HM.solveId || msg.id !== HM._activeSolveId) return false;
+    if (msg.bits != null && HM._activeBits != null && msg.bits !== HM._activeBits) {
+      return false;
+    }
+    return true;
+  };
+
+  HM._phaseFromLog = function _phaseFromLog(text) {
+    const t = String(text || "").toLowerCase();
+    if (t.indexOf("searching for a path") >= 0 || t.indexOf("path found") >= 0) {
+      return "path";
+    }
+    if (
+      t.indexOf("searching for a cycle") >= 0 ||
+      t.indexOf("cycle found") >= 0 ||
+      t.indexOf("cycle search") >= 0
+    ) {
+      return "cycle";
+    }
+    if (t.indexOf("closest") >= 0 || t.indexOf("gap") >= 0) {
+      return "closest";
+    }
+    if (t.indexOf("coloring rules out") >= 0) return "none";
+    return null;
   };
 
   HM.countWallCheckerColors = function countWallCheckerColors(coords, dims) {
@@ -545,6 +587,7 @@ window.HamiltonMod.runCodeBefore = function () {
   };
 
   HM._spawnWorkerOnce = function _spawnWorkerOnce() {
+    const epoch = HM._workerEpoch;
     const code = HM._INLINE_CLASSIC_WORKER;
     if (!code || typeof code !== "string") {
       throw new Error("inline classic worker missing — rebuild embed");
@@ -570,6 +613,20 @@ window.HamiltonMod.runCodeBefore = function () {
         HM.setWallIconState("worker");
       }
     };
+    // A newer pattern may have killed/replaced the generation while we spawned.
+    if (epoch !== HM._workerEpoch) {
+      try {
+        w.terminate();
+      } catch (_) {
+        /* ignore */
+      }
+      try {
+        URL.revokeObjectURL(blobUrl);
+      } catch (_) {
+        /* ignore */
+      }
+      return null;
+    }
     HM.worker = w;
     HM._workerBlobUrl = blobUrl;
     return w;
@@ -579,12 +636,15 @@ window.HamiltonMod.runCodeBefore = function () {
     if (HM.worker) return Promise.resolve(HM.worker);
     if (HM._workerPromise) return HM._workerPromise;
 
+    const epoch = HM._workerEpoch;
     const trySpawn = function (remaining) {
+      if (epoch !== HM._workerEpoch) return Promise.resolve(null);
       return Promise.resolve()
         .then(function () {
           return HM._spawnWorkerOnce();
         })
         .catch(function (err) {
+          if (epoch !== HM._workerEpoch) return null;
           HM.worker = null;
           if (remaining <= 1) {
             console.error("HamiltonMod: failed to start worker after retries", err);
@@ -603,20 +663,26 @@ window.HamiltonMod.runCodeBefore = function () {
         });
     };
 
-    HM._workerPromise = trySpawn(HM.WORKER_MAX_RETRIES).finally(function () {
-      HM._workerPromise = null;
+    const spawnPromise = trySpawn(HM.WORKER_MAX_RETRIES).finally(function () {
+      if (HM._workerPromise === spawnPromise) {
+        HM._workerPromise = null;
+      }
     });
+    HM._workerPromise = spawnPromise;
     return HM._workerPromise;
   };
 
   HM.onWorkerMessage = function onWorkerMessage(msg) {
-    if (msg.id !== HM.solveId) return;
+    if (!HM._messageMatchesActive(msg)) return;
     if (msg.type === "log") {
+      const phase = HM._phaseFromLog(msg.message);
+      if (phase) HM.solvePhase = phase;
       if (window.NepDebug) console.log("[Hamilton]", msg.message);
       return;
     }
     if (msg.type === "error") {
       console.error("HamiltonMod solve error:", msg.message);
+      HM.solvePhase = "none";
       HM.setWallIconState("none");
       HM.clearTour();
       return;
@@ -625,19 +691,24 @@ window.HamiltonMod.runCodeBefore = function () {
       if (msg.tour && msg.tour.length) {
         HM.currentTour = msg.tour;
         HM.isCycle = msg.kind === "cycle";
+        HM.solvePhase = msg.kind === "cycle" ? "cycle" : "path";
         HM.setWallIconState("ok");
       }
       return;
     }
     if (msg.type === "done") {
+      // Cancelled / superseded leftovers must not flip icon or tour.
+      if (msg.stopped) return;
       if (msg.coloring) HM._lastColoring = msg.coloring;
-      if (msg.bits) HM.updateIndicator();
+      HM.updateIndicator();
       if (msg.tour && msg.tour.length) {
         HM.currentTour = msg.tour;
         HM.isCycle = msg.kind === "cycle";
+        HM.solvePhase = "done";
         HM.setWallIconState("ok");
       } else {
         HM.clearTour();
+        HM.solvePhase = "none";
         HM.setWallIconState("none");
       }
     }
@@ -684,8 +755,7 @@ window.HamiltonMod.runCodeBefore = function () {
   };
 
   HM._startSolve = function _startSolve(bits, dims) {
-    HM.cancelSolve(false);
-    HM.clearTour();
+    const id = HM.beginSolveGeneration(bits);
     HM._lastBits = bits;
     HM._lastColoring = HM.pathColoringFromBits(
       bits,
@@ -695,21 +765,22 @@ window.HamiltonMod.runCodeBefore = function () {
     HM.updateIndicator();
 
     if (HM.isColoringImpossible(HM._lastColoring)) {
+      HM.solvePhase = "none";
       HM.setWallIconState("none");
       return;
     }
 
+    HM.solvePhase = "searching";
     HM.setWallIconState("searching");
-
-    const id = ++HM.solveId;
 
     const run = function (retriesLeft) {
       HM.ensureWorker().then(function (worker) {
-        if (id !== HM.solveId) return;
+        if (id !== HM.solveId || id !== HM._activeSolveId) return;
         if (!worker) {
           console.error(
             "HamiltonMod: no Worker after retries — skipping solve (will not freeze the game)"
           );
+          HM.solvePhase = "worker";
           HM.setWallIconState("worker");
           return;
         }
@@ -719,6 +790,7 @@ window.HamiltonMod.runCodeBefore = function () {
           console.error("HamiltonMod: postMessage failed", err);
           HM.cancelSolve(true);
           if (retriesLeft <= 0) {
+            HM.solvePhase = "worker";
             HM.setWallIconState("worker");
             return;
           }

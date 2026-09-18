@@ -81,7 +81,7 @@ Then open the printed URL. Module workers need HTTP(S), not `file://`.
 
 Recolors only the **brick pixels** on the wall trophy (`trophy_01`); pale mortar/backing stays unchanged. Targets native `img[jsname="UEI8qf"]` or Counter `#stat-icon`. Does not touch the fruit icon or death-screen control.
 
-Solves in a classic Web Worker (source inlined into `HamiltonMod.js` and started via blob URL) so gameplay should not freeze. After solver changes: `node scripts/embed-classic-worker.cjs`.
+Solves in a classic Web Worker (source inlined into `HamiltonMod.js` and started via blob URL) so gameplay should not freeze. Each new wall spawn **bumps a solve generation and terminates the previous Worker**, so only the current pattern’s tour/icon/progress can update. After solver changes: `node scripts/embed-classic-worker.cjs`.
 Load URL (after Pages deploy of this file):
 
 `https://darksnakegang.github.io/GoogleSnakeWallSolver/HamiltonMod.js`

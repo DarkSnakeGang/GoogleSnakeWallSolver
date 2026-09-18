@@ -134,6 +134,61 @@
         window.HamiltonMod.paintTour(ctx, 20, 0, 0);
         log("paintTour ok");
 
+        // Stale generation: old tour/done must not overwrite the current pattern.
+        const HM = window.HamiltonMod;
+        const staleId = HM.solveId;
+        const staleBits = HM._activeBits;
+        const staleTour = HM.currentTour.slice();
+
+        // Coloring-impossible: single open cell (nfree < 4 rules out path + cycle).
+        const impossible = "0" + "1".repeat(89);
+        window.__doneMsg = null;
+        HM._startSolve(impossible, dims);
+        if (HM.iconState !== "none") {
+          throw new Error("expected red/none immediately for impossible coloring");
+        }
+        if (HM.currentTour) {
+          throw new Error("tour should be cleared for new generation");
+        }
+        if (HM.solveId === staleId) {
+          throw new Error("solveId must bump on new pattern");
+        }
+        // Inject stale worker results from the previous generation.
+        HM.onWorkerMessage({
+          type: "tour",
+          id: staleId,
+          bits: staleBits,
+          tour: staleTour,
+          kind: "cycle",
+        });
+        HM.onWorkerMessage({
+          type: "done",
+          id: staleId,
+          bits: staleBits,
+          tour: staleTour,
+          kind: "cycle",
+          stopped: false,
+        });
+        if (HM.currentTour) {
+          throw new Error("stale tour must not apply after generation bump");
+        }
+        if (HM.iconState !== "none") {
+          throw new Error("stale done must not clear red/none icon");
+        }
+        // stopped leftovers for the active id must also be ignored
+        HM.onWorkerMessage({
+          type: "done",
+          id: HM.solveId,
+          bits: impossible,
+          tour: staleTour,
+          kind: "path",
+          stopped: true,
+        });
+        if (HM.currentTour) {
+          throw new Error("stopped done must not apply a tour");
+        }
+        log("stale generation ignored ok");
+
         window.__hamiltonSmoke.ok = true;
         log("ALL PASS");
       } catch (e) {
